@@ -3,7 +3,10 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io/ioutil"
 	"net/http"
+	"strconv"
+	"sync"
 
 	"seckill.validate/encrypt"
 
@@ -69,9 +72,79 @@ func (a *AccessControl) GetDistributedRight(req *http.Request) bool {
 	//判断是否是本机
 	if hostRequest == localHost {
 		//执行本机数据读取和校验
+		return a.GetDataFromMap(uid.Value)
 	} else {
 		//不是本机则充当代理访问数据返回结果
+		return a.GetDataFromOtherMap(hostRequest, req)
 	}
+}
+
+//获取本机map 并且处理业务逻辑 返回的结果类型为bool类型
+func (a *AccessControl) GetDataFromMap(uid string) (isOk bool) {
+	uidInt, err := strconv.Atoi(uid)
+	if err != nil {
+		return false
+	}
+	data := a.GetNewRecord(uidInt)
+
+	//执行逻辑判断 这里简略设置一下执行逻辑
+	if data != nil {
+		return true
+	}
+
+	return
+}
+
+//获取其他节点处理结果 充当服务器代理的角色
+func (a *AccessControl) GetDataFromOtherMap(host string, request *http.Request) bool {
+	//获取uid
+	uidPre, err := request.Cookie("uid")
+	if err != nil {
+		return false
+	}
+
+	//获取sign
+	uidSign, err := request.Cookie("sign")
+	if err != nil {
+		return false
+	}
+
+	//模拟接口访问
+	client := &http.Client{}
+	req, err := http.ReadRequest("GET", "http://"+host+":"+port+"/access", nil)
+	if err != nil {
+		return false
+	}
+
+	//手动指定，排查多余cookies
+	cookieUid := &http.Cookie{Name: "uid", Value: uidPre.Value, Path: "/"}
+	cookieSign := &http.Cookie{Name: "sign", Value: uidSign.Value, Path: "/"}
+
+	//添加cookie到模拟请求中
+	req.AddCookie(cookieUid)
+	req.AddCookie(cookieSign)
+
+	//获取返回结果
+	response, err := client.Do(req)
+	if err != nil {
+		return false
+	}
+
+	body, err := ioutil.ReadAll(response.Body)
+	if err != nil {
+		return false
+	}
+
+	//判断状态
+	if response.StatusCode == 200 {
+		if string(body) == "true" {
+			return true
+		} else {
+			return false
+		}
+	}
+
+	return false
 }
 
 //执行check正常业务逻辑
@@ -84,7 +157,7 @@ func Check(rw http.ResponseWriter, req *http.Request) {
 func Auth(rw http.ResponseWriter, req *http.Request) error {
 	fmt.Println("执行验证!")
 	//添加基于Cookie的权限验证
-	if err := CheckUserInfo(req) {
+	if err := CheckUserInfo(req); err != nil {
 		return err
 	}
 	return nil
