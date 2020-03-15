@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"sync"
 
+	"seckill.fronted/rabbitmq"
 	"seckill.validate/encrypt"
 
 	"seckill.validate/common"
@@ -97,40 +98,8 @@ func (a *AccessControl) GetDataFromMap(uid string) (isOk bool) {
 
 //获取其他节点处理结果 充当服务器代理的角色
 func (a *AccessControl) GetDataFromOtherMap(host string, request *http.Request) bool {
-	//获取uid
-	uidPre, err := request.Cookie("uid")
-	if err != nil {
-		return false
-	}
-
-	//获取sign
-	uidSign, err := request.Cookie("sign")
-	if err != nil {
-		return false
-	}
-
-	//模拟接口访问
-	client := &http.Client{}
-	req, err := http.ReadRequest("GET", "http://"+host+":"+port+"/access", nil)
-	if err != nil {
-		return false
-	}
-
-	//手动指定，排查多余cookies
-	cookieUid := &http.Cookie{Name: "uid", Value: uidPre.Value, Path: "/"}
-	cookieSign := &http.Cookie{Name: "sign", Value: uidSign.Value, Path: "/"}
-
-	//添加cookie到模拟请求中
-	req.AddCookie(cookieUid)
-	req.AddCookie(cookieSign)
-
-	//获取返回结果
-	response, err := client.Do(req)
-	if err != nil {
-		return false
-	}
-
-	body, err := ioutil.ReadAll(response.Body)
+	hostUrl := "http://" + host + ":" + port + "/check"
+	response, body, err := GetCurl(hostUrl, request)
 	if err != nil {
 		return false
 	}
@@ -145,6 +114,47 @@ func (a *AccessControl) GetDataFromOtherMap(host string, request *http.Request) 
 	}
 
 	return false
+}
+
+//模拟http请求
+func GetCurl(hostUrl string, request *http.Request) (response *http.Response, body []byte, err error) {
+	//获取uid
+	uidPre, err := request.Cookie("uid")
+	if err != nil {
+		return
+	}
+
+	//获取sign
+	uidSign, err := request.Cookie("sign")
+	if err != nil {
+		return
+	}
+
+	//模拟接口访问
+	client := &http.Client{}
+	req, err := http.ReadRequest("GET", hostUrl, nil)
+	if err != nil {
+		return
+	}
+
+	//手动指定，排查多余cookies
+	cookieUid := &http.Cookie{Name: "uid", Value: uidPre.Value, Path: "/"}
+	cookieSign := &http.Cookie{Name: "sign", Value: uidSign.Value, Path: "/"}
+
+	//添加cookie到模拟请求中
+	req.AddCookie(cookieUid)
+	req.AddCookie(cookieSign)
+
+	//获取返回结果
+	response, err := client.Do(req)
+	defer response.Body.Close()
+	if err != nil {
+		return
+	}
+
+	body, err := ioutil.ReadAll(response.Body)
+
+	return
 }
 
 //执行check正常业务逻辑
@@ -210,6 +220,19 @@ func main() {
 	for _, v := range hostArray {
 		hashConsistent.Add(v)
 	}
+
+	//获取本机ip地址
+	localIp, err := common.GetIntranceIp()
+	if err != nil {
+		fmt.Println(err)
+	}
+
+	localHost = localIp
+	fmt.Println("本机服务器ip地址: ", localhost)
+
+	//使用rabbitmq 发送消息校验服务器
+	rabbitMqValidate := rabbitmq.NewRabbitMQSimple("imoocProduct")
+	defer rabbitMqValidate.Destory()
 
 	//1.过滤器
 	filter := common.NewFilter()
