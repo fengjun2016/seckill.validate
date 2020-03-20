@@ -26,6 +26,11 @@ var localHost = "127.0.0.1"
 //设置本机服务器端口
 var port = "8081"
 
+//设置GetOne 秒杀接口请求地址 数量控制接口服务器内网ip地址  或者getOne的SLB内网IP地址
+var GetOneIp = "127.0.0.1"
+
+var GetOnePort = "8084"
+
 //设置一致性hash服务器对象
 var hashConsistent *common.Consistent
 
@@ -146,13 +151,16 @@ func GetCurl(hostUrl string, request *http.Request) (response *http.Response, bo
 	req.AddCookie(cookieSign)
 
 	//获取返回结果
-	response, err := client.Do(req)
+	response, err = client.Do(req)
 	defer response.Body.Close()
 	if err != nil {
 		return
 	}
 
-	body, err := ioutil.ReadAll(response.Body)
+	body, err = ioutil.ReadAll(response.Body)
+	if err != nil {
+		return
+	}
 
 	return
 }
@@ -161,6 +169,76 @@ func GetCurl(hostUrl string, request *http.Request) (response *http.Response, bo
 func Check(rw http.ResponseWriter, req *http.Request) {
 	//执行正常的业务逻辑
 	fmt.Println("执行check!")
+
+	queryForm, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil && len(queryForm["productID"] <= 0 && len(queryForm["productID"][0]) <= 0) {
+		rw.Write([]byte()"false")
+		return
+	}
+
+	productString := queryForm["productID"][0]
+	fmt.Println(productString)
+
+	//获取用户cookie 用于获取用户id来使用
+	userCookie, err := r.Cookie("uid")
+	if err != nil {
+		rw.Write([]byte("False"))
+		return
+	}
+
+	//1.分布式权限验证
+	right := accessControl.GetDistributedRight(req)
+	if right == false {
+		rw.Write([]byte("false"))
+		return
+	}
+
+	//2.获取数量控制权限 防止秒杀出现超卖现象
+	hostUrl := "http://" + GetOneIp + ":" + GetOnePort + "/getOne"
+	responseValidate, validateBody, err := GetCurl(hostUrl, req)
+	if err != nil {
+		rw.Write([]byte("false"))
+		return
+	}
+
+	//判断数量控制接口请求状态
+	if responseValidate.StatusCode == 200 {
+		if string(validateBody) == "true" {
+			//整合下单
+			//获取商品ID
+			productID, err := strconv.ParseInt(productString, 10, 64)
+			if err != nil {
+				rw.Write([]byte("false"))
+				return
+			}
+
+			//获取用户ID
+			userID, err := strconv.ParseInt(userCookie.Value, 10, 64)
+			if err != nil {
+				rw.Write([]byte("false"))
+				return
+			}
+
+			//创建消息体
+			message := NewMessage(userID, productID)
+			//消息体类型转化
+			byteMessage, err := json.Marshal(message)
+			if err != nil {
+				rw.Write([]byte("false"))
+				return
+			}
+
+			//生产消息
+			err = rabbitMqValidate.PublishSimple(string(byteMessage))
+			if err != nil {
+				rw.Write([]byte("false"))
+				return
+			}
+
+			rw.Write([]byte("true"))
+			return
+		}
+	}
 }
 
 //统一验证拦截器 每个接口都需要提前验证
