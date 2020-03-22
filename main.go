@@ -37,17 +37,20 @@ var hashConsistent *common.Consistent
 //用来存放控制信息
 type AccessControl struct {
 	//用来存放用户想要存放的信息
-	sourcesArray map[int]interface{}
+	sourcesArray map[int]time.Time
 
 	//加锁解决map并发读写安全
 	*sync.RWMutex
 }
 
+//服务器间隔时间 单位秒
+var interval = 20
+
 //创建全局变量
-var accessControl = &AccessControl{sourceArray: make(map[int]interface{})}
+var accessControl = &AccessControl{sourceArray: make(map[int]time.Time)}
 
 //获取用户存储中指定的数据
-func (a *AccessControl) GetNewRecord(uid int) interface{} {
+func (a *AccessControl) GetNewRecord(uid int) time.Time {
 	a.RWMutex.RLock()
 	data := a.sourceArray[uid]
 	defer a.RWMutex.RUnlock()
@@ -55,10 +58,10 @@ func (a *AccessControl) GetNewRecord(uid int) interface{} {
 }
 
 //设置数据
-func (a *AccessControl) SetNewRecord(uid int, data interface{}) {
+func (a *AccessControl) SetNewRecord(uid int) {
 	a.RWMutex.Lock()
 	defer a.RWMutex.Unlock()
-	a.sourceArray[uid] = "用户设置数据"
+	a.sourceArray[uid] = time.Now()
 }
 
 //获取用户分布式权限
@@ -91,8 +94,18 @@ func (a *AccessControl) GetDataFromMap(uid string) (isOk bool) {
 	if err != nil {
 		return false
 	}
-	data := a.GetNewRecord(uidInt)
 
+	//获取记录
+	data := a.GetNewRecord(uidInt)
+	if !data.IsZero() {
+		//业务判断，是否是指定时间之后
+		if data.Add(time.Duration(interval) * time.Second).After(time.Now()) {
+			return false
+		}
+	}
+
+	//重新设置请求的时间点
+	a.SetNewRecord(uidInt)
 	//执行逻辑判断 这里简略设置一下执行逻辑
 	if data != nil {
 		return true
@@ -325,6 +338,11 @@ func main() {
 	//使用rabbitmq 发送消息校验服务器
 	rabbitMqValidate := rabbitmq.NewRabbitMQSimple("imoocProduct")
 	defer rabbitMqValidate.Destory()
+
+	//设置静态文件目录
+	http.Handle("/html/", http.StripPrefix("/html", http.FileServer(http.Dir("./fronted/web/htmlProductShow"))))
+	//设置资源目录
+	http.Handle("/public/", http.StripPrefix("/public", http.FileServer(http.Dir("./fronted/web/public"))))
 
 	//1.过滤器
 	filter := common.NewFilter()
