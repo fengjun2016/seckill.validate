@@ -103,7 +103,7 @@ func (a *AccessControl) GetDataFromMap(uid string) (isOk bool) {
 
 //获取其他节点处理结果 充当服务器代理的角色
 func (a *AccessControl) GetDataFromOtherMap(host string, request *http.Request) bool {
-	hostUrl := "http://" + host + ":" + port + "/check"
+	hostUrl := "http://" + host + ":" + port + "/checkRight"
 	response, body, err := GetCurl(hostUrl, request)
 	if err != nil {
 		return false
@@ -165,14 +165,25 @@ func GetCurl(hostUrl string, request *http.Request) (response *http.Response, bo
 	return
 }
 
+func CheckRight(rw http.ResponseWriter, req *http.Request) {
+	right := accessControl.GetDistributedRight(req)
+	if !right {
+		rw.Write([]byte("false"))
+		return
+	}
+
+	rw.Write([]byte("true"))
+	return
+}
+
 //执行check正常业务逻辑
 func Check(rw http.ResponseWriter, req *http.Request) {
 	//执行正常的业务逻辑
 	fmt.Println("执行check!")
 
 	queryForm, err := url.ParseQuery(r.URL.RawQuery)
-	if err != nil && len(queryForm["productID"] <= 0 && len(queryForm["productID"][0]) <= 0) {
-		rw.Write([]byte()"false")
+	if err != nil || len(queryForm["productID"][0]) <= 0 {
+		rw.Write([]byte("false"))
 		return
 	}
 
@@ -239,6 +250,9 @@ func Check(rw http.ResponseWriter, req *http.Request) {
 			return
 		}
 	}
+
+	rw.Write([]byte("false"))
+	return
 }
 
 //统一验证拦截器 每个接口都需要提前验证
@@ -316,8 +330,11 @@ func main() {
 	filter := common.NewFilter()
 	//2.注册拦截器
 	filter.RegisterFilterUri("/check", Auth)
+	filter.RegisterFilterUri("/checkRight", Auth)
+
 	//3.启动服务
 	http.HandleFunc("/check", filter.Handle(Check))
+	http.HandleFunc("/checkRight", filter.Handle(CheckRight))
 
 	http.ListenAndServe(":8083", nil)
 }
